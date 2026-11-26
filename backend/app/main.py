@@ -5,8 +5,10 @@ from app.config import PROJECT_NAME
 from app.routers import (
     apps,
     audit,
+    cutover,
     dashboard,
     environments,
+    fixtures,
     health,
     promote,
     reconcile,
@@ -27,12 +29,14 @@ for mod in (
     environments,
     releases,
     promote,
+    cutover,
     windows,
     rollback,
     health,
     reconcile,
     settings,
     audit,
+    fixtures,
 ):
     app.include_router(mod.router, prefix="/api")
 

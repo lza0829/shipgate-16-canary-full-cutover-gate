@@ -1,18 +1,20 @@
 from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from app.db import db, row_to_dict
+from app.db import db
 from app.services.common import (
+    RELEASE_SELECT,
     active_release_window,
     audit,
     env_by_code,
-    get_release,
     get_setting,
     now_str,
     ordered_envs,
+    release_to_dict,
     set_app_env_version,
     upsert_instance,
 )
+from app.services.cutover import execute_full_cutover, receipt_to_dict, latest_receipt
 
 router = APIRouter(tags=["晋升"])
 
@@ -57,6 +59,17 @@ def promote(release_id: int, body: PromoteIn):
         if hard and not win:
             raise HTTPException(400, "目标环境放行窗已关，禁止晋升")
 
+        # 晋升到产 = 全量落成：与 /全量放行 写口共用同一套完成定义与同笔事务
+        if body.目标环境 == "产":
+            receipt = execute_full_cutover(
+                conn, r, note=body.备注, source="晋升到产"
+            )
+            row = conn.execute(RELEASE_SELECT + " WHERE r.id=?", (release_id,)).fetchone()
+            payload = release_to_dict(row)
+            payload["全量回执"] = receipt
+            payload["放行回执"] = receipt
+            return payload
+
         now = now_str()
         conn.execute(
             """
@@ -65,15 +78,15 @@ def promote(release_id: int, body: PromoteIn):
             """,
             (release_id, r["current_env_id"], to_env["id"], now, body.备注),
         )
-        new_status = "已放行" if body.目标环境 == "产" else "晋升中"
-        released_at = now if body.目标环境 == "产" else r["released_at"]
+        new_status = "晋升中"
         conn.execute(
             """
-            UPDATE releases SET status=?, current_env_id=?, released_at=? WHERE id=?
+            UPDATE releases SET status=?, current_env_id=? WHERE id=?
             """,
-            (new_status, to_env["id"], released_at, release_id),
+            (new_status, to_env["id"], release_id),
         )
         set_app_env_version(conn, r["app_id"], to_env["id"], r["target_version"])
         upsert_instance(conn, r["app_id"], to_env["id"], r["target_version"], "探针绿", release_id)
         audit(conn, "晋升", release_id, f"晋升到{body.目标环境}", body.备注)
-        return row_to_dict(get_release(conn, release_id))
+        row = conn.execute(RELEASE_SELECT + " WHERE r.id=?", (release_id,)).fetchone()
+        return release_to_dict(row)

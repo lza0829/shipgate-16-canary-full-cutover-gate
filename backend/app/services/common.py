@@ -2,6 +2,8 @@ from __future__ import annotations
 from datetime import datetime
 from fastapi import HTTPException
 
+from app.db import row_to_dict
+
 
 def now_str() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -54,11 +56,48 @@ SELECT r.id AS 编号,
        r.created_at AS 申请时间,
        r.admitted_at AS 入闸时间,
        r.released_at AS 放行时间,
-       r.rolled_back_at AS 回滚时间
+       r.rolled_back_at AS 回滚时间,
+       r.full_ratio AS 全量时比例,
+       r.early_full AS 未满百全量,
+       r.full_receipt_no AS 全量回执号,
+       r.full_cutover_at AS 全量落成时间
 FROM releases r
 JOIN apps a ON a.id = r.app_id
 LEFT JOIN environments e ON e.id = r.current_env_id
 """
+
+
+def release_to_dict(row) -> dict:
+    """发版单统一出参：布尔标记给真 bool，并挂全站同一套全量落成态措辞。"""
+    d = row_to_dict(row)
+    if d is None:
+        return {}
+    early = bool(d.get("未满百全量"))
+    ratio = d.get("金丝雀比例")
+    status = d.get("状态")
+    d["未满百全量"] = early
+    d["提前全量"] = early
+    d["early_full"] = early
+    d["未满百标记"] = "未满百全量" if early else ""
+    if status == "已放行":
+        done_state = "未满百全量" if early else "满百全量"
+    else:
+        done_state = "未全量"
+    d["全量落成态"] = done_state
+    if status == "已放行":
+        gate = done_state
+    elif ratio is None:
+        gate = "未知比例"
+    elif ratio < 100:
+        gate = "未满百·可提前全量挂标"
+    else:
+        gate = "满百·可全量"
+    d["全量闸结论"] = gate
+    return d
+
+
+def release_rows_to_list(rows) -> list[dict]:
+    return [release_to_dict(r) for r in rows]
 
 
 def get_release(conn, release_id: int):
